@@ -1,0 +1,30 @@
+name: Run tests
+
+on: [push, pull_request]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: true
+    - name: Install packages
+      run: source tools/ci.sh && ci_tests_setup
+    - name: Run tests
+      run: source tools/ci.sh && ci_tests_run
+
+  qemu:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: true
+    - name: Install packages
+      run: source tools/ci.sh && ci_tests_qemu_setup
+    - name: Run tests
+      run: source tools/ci.sh && ci_tests_qemu_run
