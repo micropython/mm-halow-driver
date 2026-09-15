@@ -1,0 +1,5 @@
+# Per-bench settings for the hardware soak tests.  Copy to halow_config.py on
+# the device (or bake it into the filesystem image) and fill in your values.
+COUNTRY = "US"          # regulatory domain of your HaLow AP
+SSID = "ssid-halow"
+KEY = "your-password"
