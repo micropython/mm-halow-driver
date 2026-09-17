@@ -34,6 +34,17 @@
 #define debug_printf(...)
 #endif
 
+// Control-plane trace: printed at run time when the caller has enabled the
+// MM_HALOW_TRACE_ASYNC_EV bit (via the trace option), so association progress
+// and link/fatal events can be observed on a normal build -- no MM_HALOW_DEBUG
+// rebuild required.  This is the datapath trace's control-plane counterpart.
+#define trace_printf(self, ...)                                 \
+    do {                                                        \
+        if ((self)->trace_flags & MM_HALOW_TRACE_ASYNC_EV) {    \
+            MM_HALOW_PRINTF(__VA_ARGS__);                       \
+        }                                                       \
+    } while (0)
+
 // Privacy bit in the Capability Information field of a probe response.
 #define MM_HALOW_CAP_PRIVACY   (1 << 4)
 
@@ -119,7 +130,10 @@ static void mm_halow_sta_status_cb(enum mmwlan_sta_state sta_state) {
             self->link_status = MM_HALOW_LINK_DOWN;
             break;
     }
-    debug_printf("halow: sta state %d\n", sta_state);
+    trace_printf(self, "halow: [evt] itf=%d sta %s (%d)\n", MM_HALOW_ITF_STA,
+        sta_state == MMWLAN_STA_CONNECTING ? "connecting" :
+        sta_state == MMWLAN_STA_CONNECTED ? "connected" : "disconnected",
+        sta_state);
 }
 
 static void mm_halow_fatal_error_cb(struct mmwlan_fatal_error_args *args) {
@@ -133,7 +147,7 @@ static void mm_halow_fatal_error_cb(struct mmwlan_fatal_error_args *args) {
     self->scan_active = false;
     self->link_status = MM_HALOW_LINK_FAIL;
     mm_halow_cb_tcpip_set_link_down(self, MM_HALOW_ITF_STA);
-    debug_printf("halow: fatal error at file %u line %u\n",
+    trace_printf(self, "halow: [evt] fatal error at file %u line %u\n",
         (unsigned int)args->fileid, (unsigned int)args->line);
 }
 
@@ -144,6 +158,8 @@ static void mm_halow_link_state_cb(enum mmwlan_link_state link_state, void *arg)
     } else {
         mm_halow_cb_tcpip_set_link_down(self, MM_HALOW_ITF_STA);
     }
+    trace_printf(self, "halow: [evt] itf=%d link %s\n", MM_HALOW_ITF_STA,
+        link_state == MMWLAN_LINK_UP ? "up" : "down");
 }
 
 static void mm_halow_rx_cb(uint8_t *header, unsigned header_len,
@@ -648,6 +664,7 @@ int mm_halow_wifi_join(mm_halow_t *self, size_t ssid_len, const uint8_t *ssid,
     }
 
     enum mmwlan_status status = mmwlan_sta_enable(&args, mm_halow_sta_status_cb);
+    trace_printf(self, "halow: [evt] itf=%d sta_enable -> %d\n", MM_HALOW_ITF_STA, status);
     if (status != MMWLAN_SUCCESS) {
         self->link_status = MM_HALOW_LINK_FAIL;
         return mm_halow_status_to_errno(status);
