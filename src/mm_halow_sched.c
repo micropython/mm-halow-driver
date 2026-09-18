@@ -57,6 +57,26 @@ static mm_halow_task_t *mm_halow_task_cur;
 #define MM_HALOW_SCHED_PASSES (4)
 #endif
 
+// Move the Armv8-M main-stack limit (MSPLIM) to each task's stack. A port whose
+// startup points MSPLIM at the main stack needs this: the scheduler runs tasks
+// on stacks below that limit, so a push would otherwise fault.
+#ifndef MM_HALOW_SCHED_SET_MSPLIM
+#define MM_HALOW_SCHED_SET_MSPLIM (0)
+#endif
+#if MM_HALOW_SCHED_SET_MSPLIM
+#if !(defined(__ARM_ARCH_8M_MAIN__) || defined(__ARM_ARCH_8_1M_MAIN__))
+#error "MM_HALOW_SCHED_SET_MSPLIM requires an Armv8-M main-profile core"
+#endif
+static inline uint32_t mm_halow_get_msplim(void) {
+    uint32_t v;
+    __asm volatile ("mrs %0, msplim" : "=r" (v));
+    return v;
+}
+static inline void mm_halow_set_msplim(uint32_t v) {
+    __asm volatile ("msr msplim, %0" : : "r" (v) : "memory");
+}
+#endif
+
 // Stack pointer of whoever called mm_halow_sched_run(), saved while a task runs.
 static void *mm_halow_sched_sp;
 
@@ -342,7 +362,14 @@ void mm_halow_sched_run(void) {
                 continue;
             }
             mm_halow_task_cur = task;
+            #if MM_HALOW_SCHED_SET_MSPLIM
+            uint32_t saved_msplim = mm_halow_get_msplim();
+            mm_halow_set_msplim((uint32_t)task->stack);
+            #endif
             mm_halow_context_switch(&mm_halow_sched_sp, task->sp);
+            #if MM_HALOW_SCHED_SET_MSPLIM
+            mm_halow_set_msplim(saved_msplim);
+            #endif
             mm_halow_task_cur = NULL;
         }
     }
