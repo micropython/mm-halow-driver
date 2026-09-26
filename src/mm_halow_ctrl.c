@@ -654,6 +654,12 @@ int mm_halow_wifi_join(mm_halow_t *self, size_t ssid_len, const uint8_t *ssid,
 
     self->link_status = MM_HALOW_LINK_JOIN;
 
+    // Re-scan briskly when (re)connecting instead of backing off to minutes:
+    // the default limit is 512s, too slow to recover from a transient that
+    // blocks a scan.
+    args.scan_interval_base_s = 2;
+    args.scan_interval_limit_s = 10;
+
     // The radio cannot hop channels while an association completes, so stop any
     // sweep that is in flight rather than joining on a moving radio.  Aborting
     // takes effect at the end of the current channel, so still wait for the
