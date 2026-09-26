@@ -301,6 +301,9 @@ void mm_halow_cb_process_ethernet(void *cb_data, int itf,
 // Poll the transceiver's interrupt lines, implemented in mm_halow_hal.c.
 void mm_halow_hal_poll_irqs(void);
 
+// True when the transceiver is asserting its interrupt line (data pending).
+bool mm_halow_hal_irq_asserted(void);
+
 // Re-enable the transceiver's pin interrupt after a poll has drained it.
 void mm_halow_hal_irq_rearm(void);
 

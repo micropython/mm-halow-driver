@@ -184,6 +184,10 @@ void mm_halow_hal_irq_rearm(void) {
 }
 #endif
 
+bool mm_halow_hal_irq_asserted(void) {
+    return mmhal_wlan_spi_irq_is_asserted();
+}
+
 // Called from mm_halow_poll() to pick up transceiver interrupts.  Level-checking
 // here rather than relying purely on a pin interrupt keeps the driver correct on
 // boards where the IRQ line is not wired to an interrupt-capable pin.

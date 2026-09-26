@@ -268,6 +268,14 @@ void mm_halow_deinit(mm_halow_t *self) {
 // above, with room for a larger channel plan.
 #define MM_HALOW_SCAN_MS (30000)
 
+// While the internal connect-scan listens on a channel, hold the SD bus quiet
+// between real events so its switching noise does not mask the beacon being
+// scanned for on a board that radiates a scan-time spur into its own receiver.
+// 0 disables; otherwise it is the floor period, in ms, between speculative pumps.
+#ifndef MM_HALOW_SCAN_QUIET_MS
+#define MM_HALOW_SCAN_QUIET_MS (3)
+#endif
+
 void mm_halow_poll_func(void) {
     // A dispatch raised just before deinit still runs after it, by which point
     // there is nothing left to service.
@@ -286,6 +294,22 @@ void mm_halow_poll_func(void) {
     if (!mm_halow_sched_claim()) {
         return;
     }
+    #if MM_HALOW_SCAN_QUIET_MS
+    // Confined to the JOIN scan: the transceiver is serviced at once whenever it
+    // asserts IRQ (so the association handshake and any pending RX are never
+    // delayed), and only the speculative between-event polling is spaced out.
+    static uint32_t mm_halow_scan_quiet_last_ms;
+    if (mm_halow_state.link_status == MM_HALOW_LINK_JOIN &&
+        !mm_halow_hal_irq_asserted()) {
+        uint32_t now = mm_halow_ticks_ms();
+        if ((uint32_t)(now - mm_halow_scan_quiet_last_ms) < MM_HALOW_SCAN_QUIET_MS) {
+            mm_halow_sched_release();
+            mm_halow_hal_irq_rearm();
+            return;
+        }
+        mm_halow_scan_quiet_last_ms = now;
+    }
+    #endif
     mm_halow_hal_poll_irqs();
     mm_halow_osal_timer_poll();
     mm_halow_sched_run();
