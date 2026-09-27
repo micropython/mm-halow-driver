@@ -23,6 +23,9 @@ void qemu_exit(int code);
 volatile uint32_t mm_halow_test_ticks = 0;
 volatile uint32_t mm_halow_test_event_waits = 0;
 
+// Owned by the HAL, which this harness does not link.
+bool mm_halow_transport_dead;
+
 // --- tiny allocator ----------------------------------------------------------
 // The real first-fit allocator has its own 233-check host suite; this harness is
 // about the context switch, so back mm_halow_osal_malloc() with a bump allocator
@@ -539,6 +542,31 @@ static void test_wait_forever_is_capped_in_teardown(void) {
     check(mm_halow_test_ticks > 0, "the capped wait did not actually wait");
 }
 
+static bool cond_task_ran(void *arg) {
+    (void)arg;
+    return ran_count > 0;
+}
+
+static void test_dead_transport_stops_the_tasks(void) {
+    // Once the transceiver is gone morselib must not run again, or it retries
+    // the dead bus until one of its own asserts halts the MCU.
+    pool_reset();
+    mm_halow_sched_deinit();
+    ran_count = 0;
+    check(mm_halow_sched_task_create(task_runs_once, NULL, 256, "dead") != NULL,
+        "task_create returned NULL");
+    mm_halow_transport_dead = true;
+    mm_halow_sched_run();
+    check(ran_count == 0, "a task ran on a dead transport");
+
+    // Except for a call already waiting on morselib: its tasks still run, so
+    // the call can come back out with an error instead of waiting forever.
+    mm_halow_test_ticks = 0;
+    check(mm_halow_sched_wait(cond_task_ran, NULL, 100),
+        "a waiting call's tasks did not run on a dead transport");
+    mm_halow_transport_dead = false;
+}
+
 static void test_budget_is_not_spent_when_idle(void) {
     // A pass that does no work must not report itself over budget, or every
     // bus operation would yield and nothing would ever make progress.
@@ -580,6 +608,7 @@ int main(void) {
         { "pass loop stops when out of time", test_pass_loop_stops_when_out_of_time },
         { "an infinite wait outlives the cap", test_wait_forever_outlives_the_cap },
         { "an infinite wait is capped in teardown", test_wait_forever_is_capped_in_teardown },
+        { "a dead transport stops the tasks", test_dead_transport_stops_the_tasks },
     };
 
     qemu_puts("mm_halow_sched on Cortex-M55 (qemu mps3-an547)\n");

@@ -151,6 +151,16 @@ static void mm_halow_fatal_error_cb(struct mmwlan_fatal_error_args *args) {
         (unsigned int)args->fileid, (unsigned int)args->line);
 }
 
+void mm_halow_hal_transport_failed(void) {
+    // The transceiver has stopped answering on the bus.  morselib does not
+    // notice, so report the interface failed from here.
+    mm_halow_t *self = &mm_halow_state;
+    self->scan_active = false;
+    self->link_status = MM_HALOW_LINK_FAIL;
+    mm_halow_cb_tcpip_set_link_down(self, MM_HALOW_ITF_STA);
+    MM_HALOW_PRINTF("halow: transceiver stopped responding; reset the board to recover\n");
+}
+
 static void mm_halow_link_state_cb(enum mmwlan_link_state link_state, void *arg) {
     mm_halow_t *self = arg;
     if (link_state == MMWLAN_LINK_UP) {
@@ -226,6 +236,13 @@ void mm_halow_deinit(mm_halow_t *self) {
     if (mm_halow_sched_in_callback) {
         // Reached from a scheduled callback run during a morselib wait: freeing the
         // pool here would pull it out from under the frames still standing on it.
+        return;
+    }
+    if (mm_halow_transport_dead) {
+        // morselib cannot be shut down without the transceiver: its waits never
+        // end, and bounding them trips its own asserts.  Stop servicing it and
+        // leave the rest to the board reset that recovery needs.
+        mm_halow_poll = NULL;
         return;
     }
 
@@ -403,6 +420,9 @@ static int mm_halow_ap_enable(mm_halow_t *self) {
 #endif // MM_HALOW_ENABLE_AP
 
 int mm_halow_wifi_set_up(mm_halow_t *self, int itf, bool up, const char *country) {
+    if (mm_halow_transport_dead) {
+        return -MM_HALOW_EIO;
+    }
     if (itf < 0 || itf >= MM_HALOW_ITF_MAX) {
         return -MM_HALOW_EINVAL;
     }
@@ -624,6 +644,9 @@ static int mm_halow_scan_start_locked(mm_halow_t *self) {
 
 int mm_halow_wifi_join(mm_halow_t *self, size_t ssid_len, const uint8_t *ssid,
     size_t key_len, const uint8_t *key, uint32_t auth_type, const uint8_t *bssid) {
+    if (mm_halow_transport_dead) {
+        return -MM_HALOW_EIO;
+    }
     if (ssid_len == 0 || ssid_len > MMWLAN_SSID_MAXLEN) {
         return -MM_HALOW_EINVAL;
     }
@@ -673,6 +696,9 @@ int mm_halow_wifi_join(mm_halow_t *self, size_t ssid_len, const uint8_t *ssid,
 }
 
 int mm_halow_wifi_leave(mm_halow_t *self, int itf) {
+    if (mm_halow_transport_dead) {
+        return -MM_HALOW_EIO;
+    }
     if (itf == MM_HALOW_ITF_AP) {
         return mm_halow_status_to_errno(mmwlan_ap_disable());
     }
@@ -1105,6 +1131,9 @@ int mm_halow_send_ethernet(mm_halow_t *self, int itf, size_t len, const void *bu
 
     if (len > MM_HALOW_TX_BUF_SIZE || mm_halow_tx_buf == NULL) {
         return -MM_HALOW_EINVAL;
+    }
+    if (mm_halow_transport_dead) {
+        return -MM_HALOW_EIO;
     }
 
     // mmwlan_tx() would block, and this runs from lwIP's linkoutput with PendSV

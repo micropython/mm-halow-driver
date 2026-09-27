@@ -304,5 +304,20 @@ void mm_halow_hal_poll_irqs(void);
 // Re-enable the transceiver's pin interrupt after a poll has drained it.
 void mm_halow_hal_irq_rearm(void);
 
+// Optional background SPI transfer for the long blocks of the data path.  A
+// port that can run a transfer without blocking overrides these: start returns
+// false if it cannot take the transfer, which then runs blocking; the port calls
+// mm_halow_hal_spi_async_done() from interrupt context when it completes; finish
+// is then called, with completed false if the driver gave up waiting.
+bool mm_halow_port_spi_transfer_start(size_t len, const uint8_t *src, uint8_t *dest);
+void mm_halow_port_spi_transfer_finish(bool completed);
+void mm_halow_hal_spi_async_done(void);
+
+// Set by the HAL when the transceiver has stopped answering on the bus, and
+// cleared when it is next initialised.  Only a reset of the board recovers:
+// morselib cannot be shut down without the transceiver.
+extern bool mm_halow_transport_dead;
+void mm_halow_hal_transport_failed(void);
+
 
 #endif // MM_HALOW_INCLUDED_HALOW_H
