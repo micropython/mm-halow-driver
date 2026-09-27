@@ -348,6 +348,13 @@ void mm_halow_sched_run(void) {
         // Already inside the scheduler, or called from a task.
         return;
     }
+    if (mm_halow_transport_dead && mm_halow_wait_depth == 0) {
+        // The transceiver is gone and only a board reset brings it back.  Left
+        // running, morselib retries it until one of its own asserts fires, and
+        // that halts the MCU.  So stop running it, except to let a call that
+        // was already waiting on it come back out with an error.
+        return;
+    }
     mm_halow_sched_running = true;
     mm_halow_sched_deadline = mm_halow_ticks_ms() + MM_HALOW_SCHED_BUDGET_MS;
 
