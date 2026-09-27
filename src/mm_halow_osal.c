@@ -718,7 +718,31 @@ void mm_halow_osal_timer_poll(void) {
 /*******************************************************************************/
 // Failure handling
 
+// Lines of morselib log output let through per second.  morselib logs from
+// inside its retry loops, so a transport that has failed turns into thousands of
+// lines a second written from interrupt context, which starves the console and
+// wedges the board.  Past the budget lines are dropped, and counted.
+#ifndef MM_HALOW_LOG_LINES_PER_S
+#define MM_HALOW_LOG_LINES_PER_S (20)
+#endif
+
 int mmosal_printf(const char *format, ...) {
+    static uint32_t window_start;
+    static uint32_t lines;
+    static uint32_t dropped;
+    uint32_t now = mm_halow_ticks_ms();
+    if ((uint32_t)(now - window_start) >= 1000) {
+        if (dropped) {
+            MM_HALOW_PRINTF("halow: %u log lines dropped\n", (unsigned int)dropped);
+        }
+        window_start = now;
+        lines = 0;
+        dropped = 0;
+    }
+    if (++lines > MM_HALOW_LOG_LINES_PER_S) {
+        dropped++;
+        return 0;
+    }
     va_list args;
     va_start(args, format);
     int ret = MM_HALOW_VPRINTF(format, args);
