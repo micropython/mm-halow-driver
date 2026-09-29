@@ -295,14 +295,5 @@ void mm_halow_cb_tcpip_set_link_down(mm_halow_t *self, int itf);
 void mm_halow_cb_process_ethernet(void *cb_data, int itf,
     const uint8_t *header, size_t header_len, const uint8_t *payload, size_t payload_len);
 
-/*******************************************************************************/
-// HAL hooks
-
-// Poll the transceiver's interrupt lines, implemented in mm_halow_hal.c.
-void mm_halow_hal_poll_irqs(void);
-
-// Re-enable the transceiver's pin interrupt after a poll has drained it.
-void mm_halow_hal_irq_rearm(void);
-
 
 #endif // MM_HALOW_INCLUDED_HALOW_H

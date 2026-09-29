@@ -323,6 +323,7 @@ void mmosal_task_notify(struct mmosal_task *task) {
     uintptr_t atomic_state = MM_HALOW_BEGIN_ATOMIC_SECTION();
     ((mm_halow_task_t *)task)->notify++;
     MM_HALOW_END_ATOMIC_SECTION(atomic_state);
+    mm_halow_sched_wake();
 }
 
 void mmosal_task_notify_from_isr(struct mmosal_task *task) {
@@ -390,6 +391,7 @@ bool mmosal_mutex_release(struct mmosal_mutex *mutex) {
     }
     mutex->owner = NULL;
     mutex->locked = false;
+    mm_halow_sched_wake();
     return true;
 }
 
@@ -429,6 +431,9 @@ bool mmosal_sem_give(struct mmosal_sem *sem) {
         sem->count++;
     }
     MM_HALOW_END_ATOMIC_SECTION(atomic_state);
+    if (given) {
+        mm_halow_sched_wake();
+    }
     return given;
 }
 
@@ -483,6 +488,7 @@ bool mmosal_semb_give(struct mmosal_semb *semb) {
         return false;
     }
     semb->signalled = true;
+    mm_halow_sched_wake();
     return true;
 }
 
@@ -551,6 +557,9 @@ bool mmosal_queue_pop_from_isr(struct mmosal_queue *queue, void *item) {
         queue->count--;
     }
     MM_HALOW_END_ATOMIC_SECTION(atomic_state);
+    if (popped) {
+        mm_halow_sched_wake();
+    }
     return popped;
 }
 
@@ -566,6 +575,9 @@ bool mmosal_queue_push_from_isr(struct mmosal_queue *queue, const void *item) {
         queue->count++;
     }
     MM_HALOW_END_ATOMIC_SECTION(atomic_state);
+    if (pushed) {
+        mm_halow_sched_wake();
+    }
     return pushed;
 }
 
@@ -696,6 +708,16 @@ bool mmosal_is_timer_active(struct mmosal_timer *timer) {
     return timer != NULL && timer->active;
 }
 
+bool mm_halow_osal_timer_pending(void) {
+    uint32_t now = mm_halow_ticks_ms();
+    for (struct mmosal_timer *timer = mm_halow_timer_list; timer != NULL; timer = timer->next) {
+        if (timer->active && (int32_t)(now - timer->expires_at) >= 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void mm_halow_osal_timer_poll(void) {
     uint32_t now = mm_halow_ticks_ms();
     struct mmosal_timer *timer = mm_halow_timer_list;
@@ -710,6 +732,7 @@ void mm_halow_osal_timer_poll(void) {
                 timer->active = false;
             }
             timer->callback(timer);
+            mm_halow_sched_wake();
         }
         timer = next;
     }

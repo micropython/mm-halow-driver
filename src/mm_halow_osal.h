@@ -26,6 +26,9 @@ void mm_halow_osal_free(void *ptr);
 // Run any morselib timers that have expired.  Called from mm_halow_poll().
 void mm_halow_osal_timer_poll(void);
 
+// Whether mm_halow_osal_timer_poll() would fire a timer.
+bool mm_halow_osal_timer_pending(void);
+
 // Release the memory pool back to the host.  Only safe once
 // morselib has been shut down and the scheduler torn down.
 void mm_halow_osal_deinit(void);

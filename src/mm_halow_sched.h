@@ -76,6 +76,15 @@ bool mm_halow_sched_wait(mm_halow_cond_fn_t cond, void *arg, uint32_t timeout_ms
 // re-entrant against itself (a nested call is a no-op).
 void mm_halow_sched_run(void);
 
+// Tell the scheduler that something a parked task may be waiting on has
+// changed.  Every primitive a wait can be satisfied by calls this.
+void mm_halow_sched_wake(void);
+
+// Whether a pass now could find work: something has been woken, or a parked
+// task's wait is due to time out.  While false, mm_halow_sched_run() would find
+// every task exactly where the last pass left it.
+bool mm_halow_sched_pending(void);
+
 // Claim the right to service the transceiver; false if the other context holds
 // it.  PendSV preempts MicroPython, which also runs the driver directly, so
 // without this the poll can start a bus transaction on top of one in flight.

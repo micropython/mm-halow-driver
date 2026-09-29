@@ -60,6 +60,8 @@ bool mm_halow_sched_wait(mm_halow_cond_fn_t c, void *a, uint32_t t) {
     (void)t;
     return true;
 }
+void mm_halow_sched_wake(void) {
+}
 void mm_halow_sched_run(void) {
 }
 void mm_halow_sched_reap(void) {

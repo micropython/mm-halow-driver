@@ -18,6 +18,7 @@
 #include "mmhal_wlan.h"
 #include "mmosal.h"
 #include "mm_halow.h"
+#include "mm_halow_internal.h"
 #include "mm_halow_osal.h"
 #include "mm_halow_sched.h"
 
@@ -173,7 +174,7 @@ void mm_halow_port_irq_handler(void) {
     // Coalesce: one poll drains everything the transceiver has, so further
     // edges until then are pure overhead.  Re-armed by mm_halow_hal_irq_rearm().
     mm_halow_port_irq_enable(false);
-    mm_halow_schedule_poll();
+    mm_halow_request_poll();
 }
 
 void mm_halow_hal_irq_rearm(void) {
@@ -183,6 +184,19 @@ void mm_halow_hal_irq_rearm(void) {
 void mm_halow_hal_irq_rearm(void) {
 }
 #endif
+
+// Whether the transceiver has raised something since the last poll.  IRQ is
+// an event line: the transceiver holds it until serviced.  BUSY is a level it
+// holds the whole time it is awake, so only a change on it counts here; the
+// level itself is picked up by every full pass.
+bool mm_halow_hal_irq_pending(void) {
+    static bool busy_seen;
+    bool busy = mm_halow_busy_irq_enabled && mm_halow_busy_irq_handler != NULL && mmhal_wlan_busy_is_asserted();
+    bool busy_changed = busy != busy_seen;
+    busy_seen = busy;
+    return busy_changed ||
+           (mm_halow_spi_irq_enabled && mm_halow_spi_irq_handler != NULL && mmhal_wlan_spi_irq_is_asserted());
+}
 
 // Called from mm_halow_poll() to pick up transceiver interrupts.  Level-checking
 // here rather than relying purely on a pin interrupt keeps the driver correct on
