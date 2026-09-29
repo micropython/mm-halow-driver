@@ -41,6 +41,29 @@ static mm_halow_task_t *mm_halow_task_list;
 // The task currently running, or NULL when running the scheduler itself.
 static mm_halow_task_t *mm_halow_task_cur;
 
+// Set by anything that may have changed what a parked task is waiting on, or
+// that leaves a task wanting another turn; cleared at the start of each pass.
+// While it is clear and no wait is due to time out, a pass would find every
+// task parked exactly where the last one left it.
+static volatile bool mm_halow_sched_woken;
+
+// The earliest a parked task's wait times out, gathered afresh on each pass.
+// A pass starts it as far off as the clock can say, so with no timed wait
+// outstanding it comes due about every 25 days, at the cost of one idle pass.
+static uint32_t mm_halow_sched_wake_at;
+
+static void mm_halow_sched_wake_at_reset(void) {
+    mm_halow_sched_wake_at = mm_halow_ticks_ms() + INT32_MAX;
+}
+
+void mm_halow_sched_wake(void) {
+    mm_halow_sched_woken = true;
+}
+
+bool mm_halow_sched_pending(void) {
+    return mm_halow_sched_woken || (int32_t)(mm_halow_ticks_ms() - mm_halow_sched_wake_at) >= 0;
+}
+
 // Wall clock one mm_halow_sched_run() may spend.  The scheduler is cooperative, so
 // a task that stops yielding cannot be preempted -- only denied another turn.
 #ifndef MM_HALOW_SCHED_BUDGET_MS
@@ -164,6 +187,7 @@ mm_halow_task_t *mm_halow_sched_task_create(void (*entry)(void *), void *arg, si
     }
     *tail = task;
 
+    mm_halow_sched_wake();
     return task;
 }
 
@@ -188,12 +212,14 @@ void mm_halow_sched_task_delete(mm_halow_task_t *task) {
         // Retire the calling task.  Its stack must not be touched again, so
         // switch away without saving anything of interest.
         task->state = MM_HALOW_TASK_DEAD;
+        mm_halow_sched_wake();
         void *discard;
         mm_halow_context_switch(&discard, mm_halow_sched_sp);
         // Unreachable: a dead task is never resumed.
         return;
     }
     task->state = MM_HALOW_TASK_DEAD;
+    mm_halow_sched_wake();
 }
 
 mm_halow_task_t *mm_halow_sched_task_current(void) {
@@ -253,6 +279,8 @@ void mm_halow_sched_release(void) {
 void mm_halow_sched_yield(void) {
     mm_halow_task_t *task = mm_halow_task_cur;
     if (task != NULL) {
+        // A task that yields, rather than waits, wants another turn.
+        mm_halow_sched_woken = true;
         mm_halow_context_switch(&task->sp, mm_halow_sched_sp);
     } else {
         // Not task context: run the tasks, holding the poll off for the pass so
@@ -278,6 +306,21 @@ bool mm_halow_sched_in_wait(void) {
 }
 
 bool mm_halow_sched_teardown;
+
+// Give up the turn from inside a wait.  Unlike a task that yields, a parked one
+// has nothing to do until its condition changes or its wait times out, so all
+// it leaves behind is that deadline.
+static void mm_halow_sched_park(bool timed, uint32_t wake_at) {
+    mm_halow_task_t *task = mm_halow_task_cur;
+    if (task == NULL) {
+        mm_halow_sched_yield();
+        return;
+    }
+    if (timed && (int32_t)(wake_at - mm_halow_sched_wake_at) < 0) {
+        mm_halow_sched_wake_at = wake_at;
+    }
+    mm_halow_context_switch(&task->sp, mm_halow_sched_sp);
+}
 
 bool mm_halow_sched_wait(mm_halow_cond_fn_t cond, void *arg, uint32_t timeout_ms) {
     // MMOSAL_WAIT_FOREVER is a promise: morselib's SDIO lock path asserts if it
@@ -305,7 +348,7 @@ bool mm_halow_sched_wait(mm_halow_cond_fn_t cond, void *arg, uint32_t timeout_ms
         }
         if (forever) {
             if (!mm_halow_sched_teardown) {
-                mm_halow_sched_yield();
+                mm_halow_sched_park(false, 0);
                 continue;
             }
             // Teardown began mid-wait: one bounded grace period from here.
@@ -319,10 +362,14 @@ bool mm_halow_sched_wait(mm_halow_cond_fn_t cond, void *arg, uint32_t timeout_ms
             satisfied = cond(arg);
             break;
         }
-        mm_halow_sched_yield();
+        mm_halow_sched_park(true, start + timeout_ms);
     }
     if (counted) {
         mm_halow_wait_depth--;
+    }
+    if (satisfied) {
+        // Whatever was taken may be what another task is waiting to give.
+        mm_halow_sched_wake();
     }
     return satisfied;
 }
@@ -357,6 +404,8 @@ void mm_halow_sched_run(void) {
     // task blocked in mm_halow_sched_wait() stays runnable, so this cannot be a
     // loop-until-idle; the pass count is what keeps it from spinning.
     for (int pass = 0; pass < MM_HALOW_SCHED_PASSES && !mm_halow_pass_expired(); pass++) {
+        mm_halow_sched_woken = false;
+        mm_halow_sched_wake_at_reset();
         for (mm_halow_task_t *task = mm_halow_task_list; task != NULL; task = task->next) {
             if (task->state != MM_HALOW_TASK_READY) {
                 continue;
@@ -371,6 +420,10 @@ void mm_halow_sched_run(void) {
             mm_halow_set_msplim(saved_msplim);
             #endif
             mm_halow_task_cur = NULL;
+        }
+        if (!mm_halow_sched_woken) {
+            // Every task is parked: another pass would find nothing.
+            break;
         }
     }
 
@@ -387,6 +440,8 @@ void mm_halow_sched_deinit(void) {
     mm_halow_sched_running = false;
     mm_halow_service_owner = MM_HALOW_OWNER_NONE;
     mm_halow_service_depth = 0;
+    mm_halow_sched_woken = false;
+    mm_halow_sched_wake_at_reset();
     memset(mm_halow_tasks, 0, sizeof(mm_halow_tasks));
 }
 

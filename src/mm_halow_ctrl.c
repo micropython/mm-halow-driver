@@ -21,6 +21,7 @@
 #include "mmregdb.h"
 
 #include "mm_halow.h"
+#include "mm_halow_internal.h"
 #include "mm_halow_osal.h"
 #include "mm_halow_sched.h"
 
@@ -64,6 +65,10 @@ mm_halow_t mm_halow_state = {
 };
 void (*mm_halow_poll)(void);
 
+// Set by mm_halow_request_poll() so the next poll runs in full, whatever the
+// scheduler has pending.
+static volatile bool mm_halow_poll_requested;
+
 static int mm_halow_scan_start_locked(mm_halow_t *self);
 static int mm_halow_apply_pm(mm_halow_t *self);
 static void mm_halow_apply_radio(mm_halow_t *self);
@@ -83,6 +88,11 @@ static uint8_t *mm_halow_tx_buf;
 MM_HALOW_WEAK void mm_halow_schedule_poll(void) {
     // Ports that can raise a software interrupt override this; otherwise the
     // periodic network poll is the only thing that drives the driver.
+}
+
+void mm_halow_request_poll(void) {
+    mm_halow_poll_requested = true;
+    mm_halow_schedule_poll();
 }
 
 // Translate an mmwlan status into a negative errno, the convention the rest of
@@ -290,6 +300,17 @@ void mm_halow_poll_func(void) {
     if (!mm_halow_sched_claim()) {
         return;
     }
+    // The network poll calls this every millisecond, but a pass is only worth
+    // making when it could find work: the transceiver has raised something, a
+    // poll was asked for, a timer has expired, or a task can make progress.
+    // Otherwise every task is parked exactly where the last pass left it.
+    if (!mm_halow_poll_requested && !mm_halow_hal_irq_pending() &&
+        !mm_halow_osal_timer_pending() && !mm_halow_sched_pending()) {
+        mm_halow_sched_release();
+        mm_halow_hal_irq_rearm();
+        return;
+    }
+    mm_halow_poll_requested = false;
     mm_halow_hal_poll_irqs();
     mm_halow_osal_timer_poll();
     mm_halow_sched_run();
@@ -1175,7 +1196,7 @@ int mm_halow_send_ethernet(mm_halow_t *self, int itf, size_t len, const void *bu
 
     // Only queued so far.  Ask for a poll rather than running the tasks here:
     // this is inside lwIP, and a task delivering a frame would re-enter it.
-    mm_halow_schedule_poll();
+    mm_halow_request_poll();
     return 0;
 }
 

@@ -556,6 +556,104 @@ static void test_budget_is_not_spent_when_idle(void) {
     check(!mm_halow_sched_over_budget(), "a stale deadline leaked outside a pass");
 }
 
+// --- waking --------------------------------------------------------------------
+// A pass is only worth making when a task can make progress.  These pin down
+// when the scheduler says one can.
+static volatile bool gate_open;
+static volatile int gate_checks;
+static volatile int gate_done;
+static bool cond_gate(void *arg) {
+    (void)arg;
+    gate_checks++;
+    return gate_open;
+}
+
+static void task_waits_on_gate(void *arg) {
+    (void)arg;
+    mm_halow_sched_wait(cond_gate, NULL, 0xFFFFFFFFu);
+    gate_done++;
+}
+
+static void test_parked_task_leaves_nothing_pending(void) {
+    pool_reset();
+    // The clock must not run backwards across deinit: the idle deadline it
+    // leaves behind is relative to the time it was called at.
+    mm_halow_test_ticks = 0;
+    mm_halow_sched_deinit();
+    gate_open = false;
+    gate_checks = 0;
+    gate_done = 0;
+    check(!mm_halow_sched_pending(), "an empty scheduler has work pending");
+    check(mm_halow_sched_task_create(task_waits_on_gate, NULL, 256, "gate") != NULL,
+        "task_create returned NULL");
+    check(mm_halow_sched_pending(), "a new task is not pending its first turn");
+    mm_halow_sched_run();
+    check(gate_checks == 1, "a run with every task parked made more than one pass");
+    check(!mm_halow_sched_pending(), "a parked task left work pending");
+
+    // No timeout, so time alone never makes it runnable.
+    mm_halow_test_ticks += 1000000;
+    check(!mm_halow_sched_pending(), "an untimed wait became pending with time");
+
+    gate_open = true;
+    mm_halow_sched_wake();
+    check(mm_halow_sched_pending(), "a wake was not seen");
+    mm_halow_sched_run();
+    check(gate_done == 1, "the woken task did not finish");
+    check(!mm_halow_sched_pending(), "a finished task left work pending");
+}
+
+static void task_waits_50ms(void *arg) {
+    (void)arg;
+    mm_halow_sched_wait(cond_gate, NULL, 50);
+    gate_done++;
+}
+
+static void test_timed_wait_is_pending_at_its_deadline(void) {
+    pool_reset();
+    mm_halow_test_ticks = 1000;
+    mm_halow_sched_deinit();
+    gate_open = false;
+    gate_checks = 0;
+    gate_done = 0;
+    check(mm_halow_sched_task_create(task_waits_50ms, NULL, 256, "timed") != NULL,
+        "task_create returned NULL");
+    mm_halow_sched_run();
+    check(!mm_halow_sched_pending(), "a timed wait was pending before its deadline");
+    mm_halow_test_ticks += 49;
+    check(!mm_halow_sched_pending(), "a timed wait was pending 1ms early");
+    mm_halow_test_ticks += 1;
+    check(mm_halow_sched_pending(), "a timed wait was not pending at its deadline");
+    mm_halow_sched_run();
+    check(gate_done == 1, "the wait did not time out at its deadline");
+    check(!mm_halow_sched_pending(), "a finished task left work pending");
+}
+
+static volatile int yielder_done;
+static void task_yields_twice(void *arg) {
+    (void)arg;
+    mm_halow_sched_yield();
+    mm_halow_sched_yield();
+    yielder_done++;
+}
+
+static void test_yielding_task_gets_its_next_turn(void) {
+    // A task that yields, rather than waits, has more to do: it keeps the
+    // scheduler pending until it has had its turns, within a run when the pass
+    // count allows.
+    pool_reset();
+    mm_halow_sched_deinit();
+    yielder_done = 0;
+    check(mm_halow_sched_task_create(task_yields_twice, NULL, 256, "yield") != NULL,
+        "task_create returned NULL");
+    for (int i = 0; i < 4 && yielder_done == 0; i++) {
+        check(mm_halow_sched_pending(), "a yielding task was not pending");
+        mm_halow_sched_run();
+    }
+    check(yielder_done == 1, "a yielding task never finished");
+    check(!mm_halow_sched_pending(), "a finished task left work pending");
+}
+
 int main(void) {
     static const struct test tests[] = {
         { "task runs and is reaped", test_task_runs_and_is_reaped },
@@ -580,6 +678,9 @@ int main(void) {
         { "pass loop stops when out of time", test_pass_loop_stops_when_out_of_time },
         { "an infinite wait outlives the cap", test_wait_forever_outlives_the_cap },
         { "an infinite wait is capped in teardown", test_wait_forever_is_capped_in_teardown },
+        { "a parked task leaves nothing pending", test_parked_task_leaves_nothing_pending },
+        { "a timed wait is pending at its deadline", test_timed_wait_is_pending_at_its_deadline },
+        { "a yielding task gets its next turn", test_yielding_task_gets_its_next_turn },
     };
 
     qemu_puts("mm_halow_sched on Cortex-M55 (qemu mps3-an547)\n");
