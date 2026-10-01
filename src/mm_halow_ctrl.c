@@ -229,8 +229,6 @@ void mm_halow_deinit(mm_halow_t *self) {
         return;
     }
 
-    mm_halow_poll = NULL;
-
     for (int itf = 0; itf < MM_HALOW_ITF_MAX; itf++) {
         if (self->itf_state & (1 << itf)) {
             mm_halow_wifi_set_up(self, itf, false, self->country);
@@ -243,6 +241,12 @@ void mm_halow_deinit(mm_halow_t *self) {
     mmwlan_deinit();
     mm_halow_sched_teardown = false;
     self->booted = false;
+
+    // The poll has to keep servicing the transceiver's interrupt line through
+    // the shutdown above: the waits inside it are for the transceiver's
+    // acknowledgements, and only the poll picks those up, so without it they
+    // run to their timeouts.  Only now is there nothing left to poll.
+    mm_halow_poll = NULL;
 
     mm_halow_sched_deinit();
     mm_halow_osal_deinit();
