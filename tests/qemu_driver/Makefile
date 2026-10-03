@@ -3,6 +3,7 @@
 # emulated in mm8108_emu.c.
 #
 #   make        build + run under QEMU
+#   make test   build + run, and check the output against $(EXP)
 #
 # Cortex-M55 needs arm-none-eabi-gcc 14 or newer.  Override CROSS_COMPILE to
 # point at a suitable toolchain if the default is too old.
@@ -13,6 +14,10 @@ OBJCOPY  = $(CROSS_COMPILE)objcopy
 TOP      = ../..
 BUILD    = build
 PROG     = $(BUILD)/test_bringup.elf
+EXP      = test_bringup.exp
+OUT      = $(BUILD)/test_bringup.out
+QEMU     = qemu-system-arm -M mps3-an547 -cpu cortex-m55 -nographic \
+           -semihosting-config enable=on,target=native
 
 # Hard float, as the N6 is built, so the scheduler's vpush {d8-d15} path is live.
 ARCH     = -mthumb -mcpu=cortex-m55 -mfloat-abi=hard -mfpu=fpv5-d16
@@ -70,12 +75,16 @@ $(PROG): $(OBJ) mps3.ld
 	$(Q)$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)
 
 run: $(PROG)
-	@qemu-system-arm -M mps3-an547 -cpu cortex-m55 -nographic \
-	    -semihosting-config enable=on,target=native -kernel $<
+	@$(QEMU) -kernel $<
+
+# Fails if QEMU exits with an error or the output differs from what is expected.
+test: $(PROG)
+	@$(QEMU) -kernel $< < /dev/null > $(OUT) 2>&1; status=$$?; \
+	    diff -u $(EXP) $(OUT) && [ $$status -eq 0 ] && echo "test: pass"
 
 clean:
 	rm -rf $(BUILD)
 
 -include $(OBJ:.o=.d)
 
-.PHONY: all run clean
+.PHONY: all run test clean
