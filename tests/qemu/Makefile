@@ -25,6 +25,7 @@ ARCH   = -mthumb -mcpu=cortex-m55 -mfloat-abi=hard -mfpu=fpv5-d16
 CFLAGS = $(ARCH) -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -Og -g \
           -ffreestanding -fno-common \
           -I. -I$(HALOW) -I../../lib/mm-iot-sdk/framework/morselib/include
+CFLAGS += -MMD -MP
 LDFLAGS = $(ARCH) -T$(LDSCRIPT) -nostartfiles -Wl,--gc-sections \
            -Wl,-Map=$(BUILD)/test_sched.map -specs=nosys.specs \
            -Wl,--no-warn-rwx-segments
@@ -70,5 +71,7 @@ run: $(BUILD)/test_sched.elf
 
 clean:
 	rm -rf $(BUILD)
+
+-include $(OBJ:.o=.d)
 
 .PHONY: all run clean

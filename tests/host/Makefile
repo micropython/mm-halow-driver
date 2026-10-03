@@ -8,6 +8,7 @@ SDK     = ../../lib/mm-iot-sdk/framework/morselib/include
 BUILD   = build
 CFLAGS  = -m32 -std=c11 -Wall -Wextra -Werror -g -O1 \
           -I. -I$(HALOW) -I$(SDK) -Wno-unused-parameter
+CFLAGS += -MMD -MP
 
 all: run
 
@@ -29,5 +30,7 @@ asan: $(BUILD)/test_alloc_asan
 
 clean:
 	rm -rf $(BUILD)
+
+-include $(BUILD)/test_alloc.d $(BUILD)/test_alloc_asan.d
 
 .PHONY: all run asan clean
