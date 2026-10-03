@@ -5,23 +5,29 @@
 #   make asan     build + run under ASan/UBSan (catches what the checks miss)
 HALOW   = ../../src
 SDK     = ../../lib/mm-iot-sdk/framework/morselib/include
+BUILD   = build
 CFLAGS  = -m32 -std=c11 -Wall -Wextra -Werror -g -O1 \
           -I. -I$(HALOW) -I$(SDK) -Wno-unused-parameter
 
 all: run
 
-test_alloc: test_alloc.c $(HALOW)/mm_halow_osal.c
+$(BUILD):
+	mkdir -p $@
+
+$(BUILD)/test_alloc: test_alloc.c $(HALOW)/mm_halow_osal.c | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ test_alloc.c
 
-run: test_alloc
-	./test_alloc
+run: $(BUILD)/test_alloc
+	./$<
 
-asan: test_alloc.c $(HALOW)/mm_halow_osal.c
+$(BUILD)/test_alloc_asan: test_alloc.c $(HALOW)/mm_halow_osal.c | $(BUILD)
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer \
-	    -o test_alloc_asan test_alloc.c
-	./test_alloc_asan
+	    -o $@ test_alloc.c
+
+asan: $(BUILD)/test_alloc_asan
+	./$<
 
 clean:
-	rm -f test_alloc test_alloc_asan
+	rm -rf $(BUILD)
 
 .PHONY: all run asan clean
