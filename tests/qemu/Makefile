@@ -13,9 +13,11 @@ CC       = arm-none-eabi-gcc
 # bare-metal sysroot.  Point it at a GCC >= 14 if the default is too old.
 GCC      = arm-none-eabi-gcc
 
-HALOW    = ../../src
+TOP      = ../..
+HALOW    = $(TOP)/src
 # mps3.ld is a copy of MicroPython's ports/qemu/mcu/arm/mps3.ld (MIT).
 LDSCRIPT = mps3.ld
+BUILD    = build
 
 # Matches ports/qemu/boards/MPS3_AN547/mpconfigboard.mk, which in turn matches
 # how the N6 is built: hard float, so the vpush {d8-d15} path is live.
@@ -23,8 +25,9 @@ ARCH   = -mthumb -mcpu=cortex-m55 -mfloat-abi=hard -mfpu=fpv5-d16
 CFLAGS = $(ARCH) -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -Og -g \
           -ffreestanding -fno-common \
           -I. -I$(HALOW) -I../../lib/mm-iot-sdk/framework/morselib/include
+CFLAGS += -MMD -MP
 LDFLAGS = $(ARCH) -T$(LDSCRIPT) -nostartfiles -Wl,--gc-sections \
-           -Wl,-Map=test_sched.map -specs=nosys.specs \
+           -Wl,-Map=$(BUILD)/test_sched.map -specs=nosys.specs \
            -Wl,--no-warn-rwx-segments
 
 # clang can cross-compile the sources for the Cortex-M55, but it needs the
@@ -40,28 +43,35 @@ LDFLAGS += -Wl,--no-warn-execstack
 LD = $(GCC)
 endif
 
-OBJ = startup.o test_sched.o mm_halow_sched.o
+SRC += startup.c test_sched.c $(HALOW)/mm_halow_sched.c
+
+# Each object mirrors its source's path under $(BUILD), with files from the
+# rest of the repository placed relative to $(TOP): src/foo.c builds to
+# $(BUILD)/src/foo.o.  Sources that share a name in different directories
+# therefore get distinct objects.
+OBJ += $(addprefix $(BUILD)/,$(patsubst $(TOP)/%,%,$(SRC:.c=.o)))
 
 all: run
 
-startup.o: startup.c
+$(BUILD)/%.o: %.c
+	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-test_sched.o: test_sched.c
+$(BUILD)/%.o: $(TOP)/%.c
+	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-mm_halow_sched.o: $(HALOW)/mm_halow_sched.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-test_sched.elf: $(OBJ) $(LDSCRIPT)
+$(BUILD)/test_sched.elf: $(OBJ) $(LDSCRIPT)
 	$(LD) $(LDFLAGS) -o $@ $(OBJ)
 
-run: test_sched.elf
+run: $(BUILD)/test_sched.elf
 	@qemu-system-arm -M mps3-an547 -cpu cortex-m55 -nographic \
 	    -semihosting-config enable=on,target=native \
-	    -kernel test_sched.elf
+	    -kernel $<
 
 clean:
-	rm -f $(OBJ) test_sched.elf test_sched.map
+	rm -rf $(BUILD)
+
+-include $(OBJ:.o=.d)
 
 .PHONY: all run clean
