@@ -79,6 +79,7 @@ function ci_tests_qemu_setup {
 
 function ci_tests_qemu_run {
     make $MAKEOPTS -C tests/qemu CC="$CI_GCC_ARM"
+    make $MAKEOPTS -C tests/qemu_driver CROSS_COMPILE="$CI_GCC_ARM_DIR/bin/arm-none-eabi-" test
 }
 
 # clang cross-compiles the sources (using the GCC toolchain's sysroot), then

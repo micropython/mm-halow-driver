@@ -1,0 +1,15 @@
+spi_init
+chip: command 0x0002
+chip: command 0x0025
+chip: command 0x0004
+chip: command 0x003e
+chip: command 0x003e
+mm_halow_wifi_set_up: 0
+chip: command 0x003e
+chip: command 0x003e
+chip: command 0x800c
+chip: command 0x0044
+mm_halow_wifi_scan_cached: 1
+  ssid=emu-ap bssid=02:4d:4d:00:00:aa rssi=-40 chan=27 freq=915500000 bw=1
+chip: command 0x0005
+spi_deinit
