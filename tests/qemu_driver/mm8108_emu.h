@@ -14,6 +14,9 @@ bool mm8108_emu_irq(void);
 // BUSY line: the transceiver is awake for as long as WAKE asks it to be.
 bool mm8108_emu_busy(void);
 
+// Let time pass for the transceiver.
+void mm8108_emu_tick(unsigned ms);
+
 // WAKE and RESET lines.
 void mm8108_emu_wake(bool wake);
 void mm8108_emu_reset(void);

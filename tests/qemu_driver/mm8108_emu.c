@@ -1,8 +1,8 @@
 /*
  * Emulated Morse Micro MM8108, on the far side of the SD-over-SPI bus.
  *
- * Just enough of the transceiver for morselib to load the firmware, boot it
- * and exchange commands with it.  The register addresses and bus behaviour
+ * Just enough of the transceiver for morselib to load the firmware, boot it,
+ * exchange commands with it and scan.  The register addresses and bus behaviour
  * match an SPI trace captured from real hardware; the table layouts are those
  * morselib reads (driver/morse_driver/hw.h, mm8108/yaps-hw.h).
  */
@@ -24,7 +24,10 @@
 #define YAPS_DATA           (0x00170000) // to-chip packets written, from-chip read
 #define YAPS_STATUS         (0x00178000)
 #define YAPS_STATUS_LEN     (72)
+#define YAPS_POOL_RX        (4)
 #define YAPS_POOL_CMD_RESP  (5)
+#define SKB_CHAN_DATA       (0x00)
+#define SKB_CHAN_COMMAND    (0xfe)
 #define SKB_HDR_LEN         (40)
 #define CMD_HDR_LEN         (12)
 #define RX_SLOTS            (4)
@@ -36,6 +39,9 @@
 #define HW_SCAN_START       (0x0001)
 #define HW_SCAN_ABORT       (0x0002)
 #define EVT_HW_SCAN_DONE    (0x4011)
+#define SCAN_MS             (20)
+#define STA_MAC             0x02, 0x4d, 0x4d, 0x00, 0x00, 0x01
+#define AP_BSSID            0x02, 0x4d, 0x4d, 0x00, 0x00, 0xaa
 
 static const struct __attribute__((packed)) {
     uint32_t magic, fw_version, host_flags, firmware_flags;
@@ -61,7 +67,7 @@ static const struct __attribute__((packed)) {
     } yaps;
 } ext_host_table = {
     .length = 4 + 6 + 40,
-    .mac = {0x02, 0x4d, 0x4d, 0x00, 0x00, 0x01},
+    .mac = {STA_MAC},
     .yaps = {
         .tag = 3, .length = 40,
         .ysl_addr = YAPS_DATA, .yds_addr = YAPS_DATA, .status_regs_addr = YAPS_STATUS,
@@ -84,6 +90,7 @@ static struct {
     uint16_t crc;
     // Chip.
     bool wake;
+    int scan_ms_left; // until the sweep in progress ends
     uint32_t int1_sts;
     struct {
         uint32_t addr, val;
@@ -122,17 +129,19 @@ static uint32_t *chip_reg(uint32_t addr) {
     return &chip.regs[i].val;
 }
 
-// Queue a message from the chip, a command response or an event, and raise an
-// interrupt for it.
-static void chip_send(uint16_t flags, uint16_t id, uint16_t host_id, uint16_t vif_id,
-    const void *data, unsigned len) {
-    uint8_t *rx = chip.rx[(chip.rx_head + chip.rx_count) % RX_SLOTS];
-    unsigned msg_len = CMD_HDR_LEN + len;
-    unsigned pkt_len = (SKB_HDR_LEN + msg_len + 3) & ~3;
+// Queue a from-chip packet of the given length after its packet header, and
+// raise an interrupt for it.  Returns the header, for the caller to fill in the
+// rest of it and the packet.
+static uint8_t *chip_queue(unsigned pool, uint8_t channel, unsigned len) {
+    unsigned slot = (chip.rx_head + chip.rx_count++) % RX_SLOTS;
+    uint8_t *rx = chip.rx[slot];
+    unsigned pkt_len = (SKB_HDR_LEN + len + 3) & ~3;
     memset(rx, 0, sizeof(chip.rx[0]));
+    chip.rx_len[slot] = 4 + pkt_len;
+    chip.int1_sts |= 1; // YAPS from-chip packet waiting
 
     // YAPS delimiter: size, pool, CRC7 of the rest.
-    uint32_t delim = pkt_len | YAPS_POOL_CMD_RESP << 14;
+    uint32_t delim = pkt_len | pool << 14;
     uint8_t crc = 0;
     for (int i = 24; i >= 0; i -= 8) {
         crc = crc7_sd(crc, delim >> i);
@@ -141,16 +150,48 @@ static void chip_send(uint16_t flags, uint16_t id, uint16_t host_id, uint16_t vi
     memcpy(rx, &delim, 4);
 
     rx[4] = 0xaa; // sync
-    rx[5] = 0xfe; // command channel
-    rx[6] = msg_len;
-    rx[7] = msg_len >> 8;
-    uint16_t hdr[6] = {flags, id, len, host_id, vif_id, 0};
-    memcpy(rx + 4 + SKB_HDR_LEN, hdr, CMD_HDR_LEN);
-    memcpy(rx + 4 + SKB_HDR_LEN + CMD_HDR_LEN, data, len);
+    rx[5] = channel;
+    rx[6] = len;
+    rx[7] = len >> 8;
+    return rx + 4;
+}
 
-    chip.rx_len[(chip.rx_head + chip.rx_count) % 4] = 4 + pkt_len;
-    chip.rx_count++;
-    chip.int1_sts |= 1; // YAPS from-chip packet waiting
+// Queue a command response or an event.
+static void chip_send(uint16_t flags, uint16_t id, uint16_t host_id, uint16_t vif_id,
+    const void *data, unsigned len) {
+    uint8_t *pkt = chip_queue(YAPS_POOL_CMD_RESP, SKB_CHAN_COMMAND, CMD_HDR_LEN + len);
+    uint16_t hdr[6] = {flags, id, len, host_id, vif_id, 0};
+    memcpy(pkt + SKB_HDR_LEN, hdr, CMD_HDR_LEN);
+    memcpy(pkt + SKB_HDR_LEN + CMD_HDR_LEN, data, len);
+}
+
+// The one AP on the air answers a probe, received at -40dBm on US channel 27.
+static void chip_ap_probe_response(void) {
+    static const uint8_t frame[] = {
+        0x50, 0x00, 0x00, 0x00, // frame control: probe response; duration
+        STA_MAC, // DA
+        AP_BSSID, // SA
+        AP_BSSID, // BSSID
+        0x00, 0x00, // sequence control
+        0, 0, 0, 0, 0, 0, 0, 0, // timestamp
+        0x64, 0x00, // beacon interval
+        0x00, 0x00, // capability: open
+        0, 6, 'e', 'm', 'u', '-', 'a', 'p', // SSID
+        217, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // S1G Capabilities
+        232, 6, 0x01, 68, 27, 27, 0, 0, // S1G Operation: 1MHz, class 68, channel 27
+    };
+    uint8_t *pkt = chip_queue(YAPS_POOL_RX, SKB_CHAN_DATA, sizeof(frame));
+    int16_t rssi = -40;
+    uint16_t freq_100khz = 9155;
+    memcpy(pkt + 16, &rssi, 2); // rx_status.rssi
+    memcpy(pkt + 18, &freq_100khz, 2); // rx_status.freq_100khz
+    pkt[21] = (uint8_t)-90; // rx_status.noise_dbm
+    memcpy(pkt + SKB_HDR_LEN, frame, sizeof(frame));
+}
+
+static void chip_scan_done(uint8_t aborted) {
+    chip.scan_ms_left = 0;
+    chip_send(CMD_TYPE_EVT, EVT_HW_SCAN_DONE, 0, 0, &aborted, 1);
 }
 
 static void chip_command(const uint8_t *pkt) {
@@ -172,11 +213,13 @@ static void chip_command(const uint8_t *pkt) {
     chip_send(CMD_TYPE_RESP, id, host_id, vif_id, rsp, sizeof(rsp));
 
     if (id == CMD_HW_SCAN) {
-        // Nothing is on the air, so a sweep finishes at once, empty.
         uint32_t flags = cmd[12] | cmd[13] << 8 | cmd[14] << 16 | (uint32_t)cmd[15] << 24;
-        if (flags & (HW_SCAN_START | HW_SCAN_ABORT)) {
-            uint8_t aborted = (flags & HW_SCAN_ABORT) != 0;
-            chip_send(CMD_TYPE_EVT, EVT_HW_SCAN_DONE, 0, 0, &aborted, 1);
+        if (flags & HW_SCAN_START) {
+            // The AP answers straight away, and the sweep ends a little later.
+            chip_ap_probe_response();
+            chip.scan_ms_left = SCAN_MS;
+        } else if (flags & HW_SCAN_ABORT) {
+            chip_scan_done(1);
         }
     }
 }
@@ -331,4 +374,10 @@ void mm8108_emu_wake(bool wake) {
 
 void mm8108_emu_reset(void) {
     memset(&chip, 0, sizeof(chip));
+}
+
+void mm8108_emu_tick(unsigned ms) {
+    if (chip.scan_ms_left > 0 && (chip.scan_ms_left -= ms) <= 0) {
+        chip_scan_done(0);
+    }
 }

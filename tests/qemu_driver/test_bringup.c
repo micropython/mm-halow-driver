@@ -12,6 +12,9 @@
 #include "mm_halow.h"
 #include "mm8108_emu.h"
 
+// Time that passes each time the driver waits.
+#define POLL_MS (2)
+
 volatile uint32_t mm_halow_test_ticks = 0;
 
 // --- test hooks declared by mm_halow_configport.h ----------------------------
@@ -31,7 +34,8 @@ void mm_halow_test_pin_write(mm_halow_pin_t pin, bool value) {
 }
 
 void mm_halow_test_event_poll(void) {
-    mm_halow_test_ticks += 2;
+    mm_halow_test_ticks += POLL_MS;
+    mm8108_emu_tick(POLL_MS);
     if (mm_halow_poll != NULL) {
         mm_halow_poll();
     }
@@ -103,6 +107,13 @@ int main(void) {
     mm_halow_ev_scan_result_t result;
     size_t n = mm_halow_wifi_scan_cached(&mm_halow_state, &result, 1);
     printf("mm_halow_wifi_scan_cached: %u\n", n);
+    if (n > 0) {
+        printf("  ssid=%.*s bssid=%02x:%02x:%02x:%02x:%02x:%02x rssi=%d chan=%u freq=%lu bw=%u\n",
+            result.ssid_len, result.ssid,
+            result.bssid[0], result.bssid[1], result.bssid[2],
+            result.bssid[3], result.bssid[4], result.bssid[5],
+            result.rssi, result.chan_num, (unsigned long)result.channel_freq_hz, result.bw_mhz);
+    }
     mm_halow_deinit(&mm_halow_state);
     return ret != 0;
 }
