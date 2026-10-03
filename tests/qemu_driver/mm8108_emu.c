@@ -28,6 +28,14 @@
 #define SKB_HDR_LEN         (40)
 #define CMD_HDR_LEN         (12)
 #define RX_SLOTS            (4)
+#define CMD_TYPE_RESP       (0x0002)
+#define CMD_TYPE_EVT        (0x0004)
+#define CMD_GET_VERSION     (0x0002)
+#define CMD_ADD_INTERFACE   (0x0004)
+#define CMD_HW_SCAN         (0x0044)
+#define HW_SCAN_START       (0x0001)
+#define HW_SCAN_ABORT       (0x0002)
+#define EVT_HW_SCAN_DONE    (0x4011)
 
 static const struct __attribute__((packed)) {
     uint32_t magic, fw_version, host_flags, firmware_flags;
@@ -114,23 +122,14 @@ static uint32_t *chip_reg(uint32_t addr) {
     return &chip.regs[i].val;
 }
 
-// Queue a response to a command; the transceiver raises an interrupt for it.
-static void chip_command(const uint8_t *pkt) {
-    static const char version[] = "rel_mm8108_2_0_0";
-    const uint8_t *cmd = pkt + SKB_HDR_LEN;
-    uint16_t id = cmd[2] | cmd[3] << 8;
-    printf("chip: command 0x%04x\n", id);
-
-    uint8_t *rx = chip.rx[(chip.rx_head + chip.rx_count++) % RX_SLOTS];
-    unsigned payload = 64; // zeroes, unless the command needs more
+// Queue a message from the chip, a command response or an event, and raise an
+// interrupt for it.
+static void chip_send(uint16_t flags, uint16_t id, uint16_t host_id, uint16_t vif_id,
+    const void *data, unsigned len) {
+    uint8_t *rx = chip.rx[(chip.rx_head + chip.rx_count) % RX_SLOTS];
+    unsigned msg_len = CMD_HDR_LEN + len;
+    unsigned pkt_len = (SKB_HDR_LEN + msg_len + 3) & ~3;
     memset(rx, 0, sizeof(chip.rx[0]));
-    if (id == 0x0002) { // GET_VERSION
-        payload = 4 + sizeof(version);
-        rx[4 + SKB_HDR_LEN + CMD_HDR_LEN + 4] = sizeof(version) - 1;
-        memcpy(rx + 4 + SKB_HDR_LEN + CMD_HDR_LEN + 8, version, sizeof(version));
-    }
-    unsigned rsp_len = CMD_HDR_LEN + 4 + payload; // header, status, payload
-    unsigned pkt_len = (SKB_HDR_LEN + rsp_len + 3) & ~3;
 
     // YAPS delimiter: size, pool, CRC7 of the rest.
     uint32_t delim = pkt_len | YAPS_POOL_CMD_RESP << 14;
@@ -143,15 +142,43 @@ static void chip_command(const uint8_t *pkt) {
 
     rx[4] = 0xaa; // sync
     rx[5] = 0xfe; // command channel
-    rx[6] = rsp_len;
-    rx[7] = rsp_len >> 8;
-    uint8_t *rsp = rx + 4 + SKB_HDR_LEN;
-    memcpy(rsp, cmd, CMD_HDR_LEN); // message_id, host_id and vif_id echoed
-    rsp[0] = 2; // flags: response
-    rsp[4] = rsp_len - CMD_HDR_LEN;
-    rsp[5] = 0;
-    chip.rx_len[(chip.rx_head + chip.rx_count - 1) % 4] = 4 + pkt_len;
+    rx[6] = msg_len;
+    rx[7] = msg_len >> 8;
+    uint16_t hdr[6] = {flags, id, len, host_id, vif_id, 0};
+    memcpy(rx + 4 + SKB_HDR_LEN, hdr, CMD_HDR_LEN);
+    memcpy(rx + 4 + SKB_HDR_LEN + CMD_HDR_LEN, data, len);
+
+    chip.rx_len[(chip.rx_head + chip.rx_count) % 4] = 4 + pkt_len;
+    chip.rx_count++;
     chip.int1_sts |= 1; // YAPS from-chip packet waiting
+}
+
+static void chip_command(const uint8_t *pkt) {
+    const uint8_t *cmd = pkt + SKB_HDR_LEN;
+    uint16_t id = cmd[2] | cmd[3] << 8;
+    uint16_t host_id = cmd[6] | cmd[7] << 8;
+    uint16_t vif_id = cmd[8] | cmd[9] << 8;
+    printf("chip: command 0x%04x\n", id);
+
+    // Status 0, then a payload of zeroes unless the command needs more.
+    uint8_t rsp[4 + 64] = {0};
+    if (id == CMD_GET_VERSION) {
+        static const char version[] = "rel_mm8108_2_0_0";
+        rsp[4] = sizeof(version) - 1;
+        memcpy(rsp + 8, version, sizeof(version));
+    } else if (id == CMD_ADD_INTERFACE) {
+        vif_id = 0; // the id of the new interface
+    }
+    chip_send(CMD_TYPE_RESP, id, host_id, vif_id, rsp, sizeof(rsp));
+
+    if (id == CMD_HW_SCAN) {
+        // Nothing is on the air, so a sweep finishes at once, empty.
+        uint32_t flags = cmd[12] | cmd[13] << 8 | cmd[14] << 16 | (uint32_t)cmd[15] << 24;
+        if (flags & (HW_SCAN_START | HW_SCAN_ABORT)) {
+            uint8_t aborted = (flags & HW_SCAN_ABORT) != 0;
+            chip_send(CMD_TYPE_EVT, EVT_HW_SCAN_DONE, 0, 0, &aborted, 1);
+        }
+    }
 }
 
 static uint8_t chip_read(uint32_t addr) {

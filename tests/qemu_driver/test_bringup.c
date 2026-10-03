@@ -100,6 +100,9 @@ void mm_halow_cb_process_ethernet(void *cb_data, int itf,
 int main(void) {
     int ret = mm_halow_wifi_set_up(&mm_halow_state, MM_HALOW_ITF_STA, true, "US");
     printf("mm_halow_wifi_set_up: %d\n", ret);
+    mm_halow_ev_scan_result_t result;
+    size_t n = mm_halow_wifi_scan_cached(&mm_halow_state, &result, 1);
+    printf("mm_halow_wifi_scan_cached: %u\n", n);
     mm_halow_deinit(&mm_halow_state);
     return ret != 0;
 }
