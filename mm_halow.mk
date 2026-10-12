@@ -1,6 +1,16 @@
 # Build fragment for embedding builds (make-based): links the prebuilt
 # morselib and the transceiver firmware/BCF blobs.  The including build must
-# provide TOP, BUILD, CC, CFLAGS, OBJCOPY and collect LIBS/OBJ/CFLAGS.
+# provide TOP, BUILD, CC, CFLAGS and OBJCOPY.
+#
+# This file only defines variables and the rules for the blobs; it never
+# touches the including build's own variables.  The including build appends
+# what it wants from:
+#
+#   MM_HALOW_CFLAGS  compiler flags for every file that includes the driver
+#   MM_HALOW_LIBS    morselib and the C library it needs, as one link group
+#   MM_HALOW_OBJ     the firmware/BCF blob objects
+#   MM_HALOW_SRC_C   morselib's sources, relative to TOP, when
+#                    MM_HALOW_MORSELIB_SOURCE=1 (empty otherwise)
 
 MM_HALOW_DIR ?= lib/mm-halow-driver
 MM_HALOW_TOP ?= $(TOP)/$(MM_HALOW_DIR)
@@ -25,22 +35,30 @@ ifeq ($(wildcard $(MM_HALOW_MORSELIB_DIR)/lib/$(MM_HALOW_MORSELIB_CORE)/libmorse
 $(info Fetching the mm-iot-sdk nested submodule...)
 $(shell cd $(MM_HALOW_TOP) && git submodule update --init lib/mm-iot-sdk >&2)
 endif
+MM_HALOW_CFLAGS =
+MM_HALOW_LIBS =
+MM_HALOW_SRC_C =
+
 ifeq ($(MM_HALOW_MORSELIB_SOURCE),1)
-INC += $(addprefix -I$(MM_HALOW_MORSELIB_DIR)/,src src/internal src/emmet src/umac/rc/mmrc_osal mmrc/src/core)
-SRC_THIRDPARTY_C += $(patsubst $(TOP)/%,%,\
+MM_HALOW_CFLAGS += $(addprefix -I$(MM_HALOW_MORSELIB_DIR)/,src src/internal src/emmet src/umac/rc/mmrc_osal mmrc/src/core)
+MM_HALOW_CFLAGS += -DLOOKAROUND_FAIL_MAX=50 -Wno-c++-compat
+MM_HALOW_SRC_C += $(patsubst $(TOP)/%,%,\
 	$(shell find $(MM_HALOW_MORSELIB_DIR)/src $(MM_HALOW_MORSELIB_DIR)/mmrc/src -name '*.c'))
-CFLAGS_THIRDPARTY += -DLOOKAROUND_FAIL_MAX=50 -Wno-c++-compat
 else
 # morselib is prebuilt against newlib, but the ports link with -nostdlib, so the
 # C library functions it calls (sscanf, qsort, setjmp, _ctype_, ...) are not
 # otherwise pulled in.  Resolve libc/libm for the target multilib the same way
 # the ports resolve libgcc, and group them with the archive so the linker settles
-# the references between morselib and libc regardless of order.  These are lazily
-# expanded: CFLAGS only carries the -mcpu flags that select the multilib once the
-# including port has finished adding them, after this file is included.
+# the references between morselib and libc regardless of order.  libgcc is in
+# the group too, so the group links wherever the including build puts it on the
+# command line.  These are lazily expanded: CFLAGS only carries the -mcpu flags
+# that select the multilib once the including build has finished adding them,
+# after this file is included.
 MM_HALOW_LIBC = $(shell $(CC) $(CFLAGS) -print-file-name=libc.a)
 MM_HALOW_LIBM = $(shell $(CC) $(CFLAGS) -print-file-name=libm.a)
-LIBS += -Wl,--start-group $(MM_HALOW_MORSELIB_DIR)/lib/$(MM_HALOW_MORSELIB_CORE)/libmorse.a $(MM_HALOW_LIBC) $(MM_HALOW_LIBM) -Wl,--end-group
+MM_HALOW_LIBGCC = $(shell $(CC) $(CFLAGS) -print-libgcc-file-name)
+MM_HALOW_LIBS += -Wl,--start-group $(MM_HALOW_MORSELIB_DIR)/lib/$(MM_HALOW_MORSELIB_CORE)/libmorse.a \
+	$(MM_HALOW_LIBC) $(MM_HALOW_LIBM) $(MM_HALOW_LIBGCC) -Wl,--end-group
 endif
 
 # objcopy derives a blob's symbol names from its path, mangling everything that
@@ -73,7 +91,7 @@ $(MM_HALOW_FW_OBJ): $(MM_HALOW_FW_MBIN)
 		--set-section-alignment .data=4
 
 ifneq ($(MM_HALOW_BCF_MBIN),)
-CFLAGS += -DMM_HALOW_BCF=1
+MM_HALOW_CFLAGS += -DMM_HALOW_BCF=1
 MM_HALOW_BCF_OBJ = $(BUILD)/$(MM_HALOW_DIR)/mm_halow_bcf.o
 
 $(MM_HALOW_BCF_OBJ): $(MM_HALOW_BCF_MBIN)
@@ -86,4 +104,4 @@ $(MM_HALOW_BCF_OBJ): $(MM_HALOW_BCF_MBIN)
 		--set-section-alignment .data=4
 endif
 
-OBJ += $(MM_HALOW_FW_OBJ) $(MM_HALOW_BCF_OBJ)
+MM_HALOW_OBJ = $(MM_HALOW_FW_OBJ) $(MM_HALOW_BCF_OBJ)

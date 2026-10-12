@@ -30,12 +30,15 @@ LDFLAGS  = $(ARCH) -Tmps3.ld -nostartfiles -specs=nosys.specs -Wl,--gc-sections 
 
 all: run
 
-# Adds morselib to LIBS and the firmware/BCF blobs to OBJ.
+# morselib and the firmware/BCF blobs.
 MM_HALOW_TOP = $(TOP)
 Q     = @
 ECHO  = @echo
 MKDIR = mkdir
 include $(TOP)/mm_halow.mk
+CFLAGS += $(MM_HALOW_CFLAGS)
+LIBS += $(MM_HALOW_LIBS)
+OBJ += $(MM_HALOW_OBJ)
 
 SRC = \
 	startup.c \
