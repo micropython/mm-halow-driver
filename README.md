@@ -34,8 +34,10 @@ host's scheduler through a small OSAL shim -- no vendor RTOS.
   - `mm_halow_pktmem.c` -- the packet-memory pool.
   - `mmport.h` -- morselib's port header (name fixed by the SDK).
 - `mm_halow.mk` -- build fragment for make-based embedders: prebuilt morselib
-  linkage (grouped with the target multilib's libc/libm) and the firmware/BCF
-  blob embedding.
+  linkage (grouped with the target multilib's libc/libm/libgcc) and the
+  firmware/BCF blob embedding.  It only defines `MM_HALOW_CFLAGS`,
+  `MM_HALOW_LIBS`, `MM_HALOW_OBJ` and `MM_HALOW_SRC_C`; the embedder appends
+  them to its own variables.
 - `tests/host` -- allocator tests, compiled natively from the real sources
   (`make`, `make asan`).
 - `tests/qemu` -- scheduler tests on a Cortex-M55 under QEMU (`make`), since
